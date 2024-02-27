@@ -21,6 +21,9 @@ from src.module.db_connection import PostgreSQL
 from dotenv import load_dotenv
 load_dotenv(".env")
 
+
+replace_null = lambda x : 'NULL' if x is None else "'"+x.replace("'", "''")+ "'"
+
 class Crawler():
 
     def __init__(self):
@@ -38,6 +41,9 @@ class Crawler():
 
         return self.driver
 
+    def close(self):
+        self.driver.close()
+
 
 class DataControl(object):
 
@@ -46,27 +52,64 @@ class DataControl(object):
 
     def get_list(self):
         list_df = self.db.sql_dataframe("""select company_nm, report_nm, report_dt, url, company_cd
-                from  crawl_fs_link cfl 
-                where is_read_complete is null
-                ;""")
+                            from  crawl_fs_link cfl 
+                            where not exists (select 'x' from report r where cfl.company_cd = r.company_cd 
+                                                                    and cfl.url = r.url)
+                            ;""")
         return list_df
+
+    def insert_first_page(self, company_cd, report_dt, biz_start_date, biz_end_date, ceo, url, first_page_url):
+        query = f"""INSERT INTO public.report (company_cd, report_dt, biz_start_date, biz_end_date, ceo, url, first_page_url) 
+                       VALUES ('{company_cd}','{report_dt}','{biz_start_date}','{biz_end_date}','{ceo}', '{url}' ,'{first_page_url}')
+                       On CONFLICT (company_cd, url)
+                       DO UPDATE 
+                       SET biz_start_date='{biz_start_date}',
+                       biz_end_date='{biz_end_date}',
+                       ceo='{ceo}',
+                       url='{url}',
+                       first_page_url='{first_page_url}',
+                       updated_timestamp='now()';"""
+        self.db.sql_execute(query)
+
+    def insert_stockholder_info(self, company_cd, url, name, relation, stock_type, stockholder_url):
+        query = f"""INSERT INTO public.stockholder (company_cd, url, "name", relation, stock_type, stockholder_url) 
+                                        VALUES ('{company_cd}', '{url}', '{name}', '{relation}', '{stock_type}', '{stockholder_url}')
+                                        On CONFLICT (company_cd, url, "name", stock_type)
+                                        DO UPDATE 
+                                        SET name = '{name}',
+                                        relation = '{relation}',
+                                        stock_type = '{stock_type}',
+                                        stockholder_url = '{stockholder_url}',
+                                        updated_time = 'now()'
+                                        ;"""
+        self.db.sql_execute(query)
+
+    def insert_info24(self, company_cd, report_dt, info_24_group, url):
+        query = f"""INSERT INTO public.report (company_cd, report_dt, info_24, url) 
+                                               VALUES ('{company_cd}','{report_dt}',{'NULL' if info_24_group is None else "'"+info_24_group.replace("'", "''")+ "'"}, '{url}')
+                                               On CONFLICT (company_cd, url)
+                                               DO UPDATE 
+                                               SET info_24={'NULL' if info_24_group is None else "'"+info_24_group.replace("'", "''")+ "'"},
+                                               url = '{url}'
+                                               updated_timestamp='now()';"""
+        self.db.sql_execute(query)
 
 
 class ReadPage(Crawler):
     """
-    1. 해당 자료 연도
+    1. 해당 자료 연도 (o)
      - 1 페이지 : 사업년도
-    2. 기업코드
+    2. 기업코드 (o)
      - 이미 수집됨
-    3. 기업명
+    3. 기업명 (o)
      - 이미 수집됨
-    4. 해당 자료의 CEO
-     - 1 페이지 : 대표이사
+    4. 해당 자료의 CEO (o)
+     - 1 페이지 : 대표이사 (o)
     5. Family business CEO여부
 
-    6. 사외 이사 수
+    6. 사외 이사 수 (-)
 
-    7. 이사회 수
+    7. 이사회 수 (-)
 
     8. 해당년도 이사회장 이름
     """
@@ -79,7 +122,7 @@ class ReadPage(Crawler):
 
         # 회사별 검색 접속
         self.driver.get(url=url)
-        time.sleep(10)
+        time.sleep(3)
 
     def find_biz_report(self) -> None:
         is_find = False
@@ -110,7 +153,10 @@ class ReadPage(Crawler):
             df.dropna(axis=1, inplace=True)
             df.reset_index(inplace=True, drop=True)
             if len(df)>1 and df.loc[0, 0] == df.loc[1, 0] == "사업연도":
-                df = df.apply(lambda x: dt.datetime.strptime(x[1],"%Y년 %m월 %d일"), axis=1)
+                try:
+                    df = df.apply(lambda x: dt.datetime.strptime(x[1],"%Y년 %m월 %d일"), axis=1)
+                except ValueError:
+                    df = df.apply(lambda x: dt.datetime.strptime(x[1], "%Y.%m.%d"), axis=1)
                 self.biz_start_date = df.loc[0]
                 self.biz_end_date = df.loc[1]
 
@@ -120,10 +166,27 @@ class ReadPage(Crawler):
             else:
                 continue
 
-            return self.biz_start_date, self.biz_end_date, self.ceo
+        return self.biz_start_date, self.biz_end_date, self.ceo
+
+    def parsing_stockholder_page(self, linked_url):
+        parse_df_list = pd.read_html(linked_url)
+        # biz_period_raw_df = parse_df_list[0]
+
+        for df in parse_df_list:
+
+            df.dropna(inplace=True)
+            df.dropna(axis=1, inplace=True)
+            df.reset_index(inplace=True, drop=True)
+            if isinstance(df.columns,pd.core.indexes.multi.MultiIndex):
+                df.columns = [i[0].replace(" ","") for i in df.columns]
+            if "관계" in df.columns:
+                print(df)
+                stockholder_df = df[["성명","관계","주식의종류"]]
+                stockholder_df = stockholder_df.loc[stockholder_df["성명"] != "계"]
+                return stockholder_df
 
 
-    def find_24_info_tab(self):
+    def close_tab_group(self):
         for i in range(50):
             try:
                 self.driver.find_element(By.XPATH, f'//*[@id="{i}"]/i').click()
@@ -131,23 +194,28 @@ class ReadPage(Crawler):
             except selenium.common.exceptions.NoSuchElementException:
                 pass
 
+    def find_tab(self, memu_name):
         menu_list = self.driver.find_element(By.ID, "listTree").find_element(By.TAG_NAME,'ul').find_elements(By.TAG_NAME, 'li')
 
         for idx, menu in enumerate(menu_list):
-            if "이사회등회사의기관에관한사항" in menu.text.replace(" ",""):
+            if memu_name.replace(" ","") in menu.text.replace(" ",""):
                 menu.click()
 
-
-    def parsing_24(self):
+    def parsing_24(self, page_url):
+        result = None
         # 가.이사회의 구성 개요
-        self.driver.get('https://dart.fss.or.kr/report/viewer.do?rcpNo=20230321001125&dcmNo=9083205&eleId=33&offset=1259642&length=38545&dtd=dart3.xsd')
+        self.driver.get(page_url)
+        time.sleep(1)
         html_text_list  = self.driver.find_elements(By.TAG_NAME, 'p')
 
-        html_text_list[3].text
-
         for idx, html_text in enumerate(html_text_list):
-            if "가. 이사회의 구성 개요" in html_text.text:
-                print(idx, html_text.text)
+            if "가. 이사회의 구성 개요" in html_text.text or ("이사회" in html_text.text and "구성" in html_text.text and "개요" in html_text.text):
+                result = html_text.text
+                if len(result) < 20:
+                    result += "\n"
+                    result += html_text_list[idx+1].text
+                    break
+        return result
 
 
 """
@@ -175,17 +243,60 @@ if __name__ == '__main__':
         user=db_user,
         password=db_password,
     )
-    list_df = DataControl(db=db_conn).get_list()
+    db_controller = DataControl(db=db_conn)
+    list_df = db_controller.get_list()
 
-    crawl = ReadPage()
-    crawl.go_to_page(url=list_df.loc[0,'url'])
+    for idx, data in list_df.iterrows():
 
-    crawl.find_biz_report()
-    first_page = crawl.find_linked_page()
+        print(data['company_nm'],data['company_cd'],data['url'])
+        if data['company_cd'] in ["001120","161000","138930"]:
+            continue
+        crawl = ReadPage()
+        crawl.go_to_page(url=data['url'])
 
-    crawl.parsing_first_page(first_page)
+        crawl.find_biz_report()
+        first_page = crawl.find_linked_page()
 
-    ## 24
-    crawl.find_24_info_tab()
+        biz_start_date, biz_end_date, ceo = crawl.parsing_first_page(first_page)
+        print(biz_start_date,biz_end_date,ceo)
+        db_controller.insert_first_page(data['company_cd'], data['report_dt'],biz_start_date,biz_end_date,ceo, data['url'],first_page)
+        # db_controller.db._connect.rollback()
+        crawl.close_tab_group()
 
-    crawl.parsing_24()
+        ##
+        crawl.find_tab("주주에관한사항")
+        stockholder_page_url = crawl.find_linked_page()
+        stockholder_df = crawl.parsing_stockholder_page(stockholder_page_url)
+        for _, stock_data in stockholder_df.iterrows():
+            db_controller.insert_stockholder_info(company_cd=data['company_cd'],url=data['url'], name=stock_data['성명'],relation=stock_data['관계'], stock_type=stock_data['주식의종류'], stockholder_url=stockholder_page_url)
+        # db_controller.db._connect.rollback()
+
+        ## 24
+        # crawl.find_tab("이사회등회사의기관에관한사항")
+        # url_24 = crawl.find_linked_page()
+        # info_24_group = crawl.parsing_24(url_24)
+        # print(info_24_group)
+        # db_controller.insert_info24(data['company_cd'], data['report_dt'], info_24_group)
+        #
+        crawl.driver.close()
+        time.sleep(0.8)
+
+        if idx % 15 ==0:
+            time.sleep(10)
+
+    #
+    # info_24_group
+    #
+    # # 대표의 의사회장
+    # parse_df_list = pd.read_html("https://dart.fss.or.kr/report/viewer.do?rcpNo=20230321001125&dcmNo=9083205&eleId=33&offset=1259642&length=38545&dtd=dart3.xsd")
+    # parse_df_list[0]
+    # parse_df_list[2]
+    #
+    # # CASE 1
+    # parse_df_list[0]
+    # for df in parse_df_list:
+    #     df = parse_df_list[0]
+    #     # 컬럼 조사
+    #     for col in df.columns.tolist():
+    #         if col.replace(" ","") in ["이사회의장"]:
+    #             chair_24 = df[col][0]
