@@ -11,7 +11,6 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import Select
 
 from bs4 import BeautifulSoup
-import requests
 import pandas as pd
 
 from src.module.crawler import Crawler
@@ -78,15 +77,18 @@ class CrawlingList(Crawler):
         self.driver.find_element(By.XPATH, '//*[@id="textCrpNm"]').clear()
 
 
-def load_company_df(db_conn: PostgreSQL, tb_name: str):
-    company_df = db_conn.sql_dataframe(f"select company_cd, company_nm from {tb_name};")
+def load_company_df(db_conn: PostgreSQL):
+    company_df = db_conn.sql_dataframe(f"""select company_cd, company_nm 
+from company_code cc 
+where not exists (select 'x' from crawl_fs_link cfl where cc.company_cd=cfl.company_cd) 
+;""")
 
     return company_df
 
 
 if __name__ == '__main__':
 
-    load_dotenv()
+    load_dotenv(".env")
     db_host = os.environ['DB_HOST']
     db_port = os.environ['DB_PORT']
     db_database = os.environ['DB_DATABASE']
@@ -99,7 +101,7 @@ if __name__ == '__main__':
                          password=db_password)
     db_conn.sa_session()
     ## 리스트 가져오기
-    company_df = load_company_df(db_conn=db_conn,tb_name="company_code")
+    company_df = load_company_df(db_conn=db_conn)
 
     ## 초기 설정
     get_list = CrawlingList()
