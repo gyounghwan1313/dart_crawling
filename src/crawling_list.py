@@ -66,7 +66,10 @@ class CrawlingList(Crawler):
 
         rows = self.driver.find_element(By.ID,'tbody').find_elements(By.TAG_NAME,"tr")
         for r in rows:
-            td = int(r.find_element(By.TAG_NAME,'td').text)
+            text = r.find_element(By.TAG_NAME,'td').text
+            if text == '조회 결과가 없습니다.':
+                return None
+            td = int(text)
             if td in target_index:
                 report_url = r.find_elements(By.TAG_NAME,'a')[1].get_attribute("href")
                 self.target_df.loc[td-1, 'url'] = report_url
@@ -81,6 +84,7 @@ def load_company_df(db_conn: PostgreSQL):
     company_df = db_conn.sql_dataframe(f"""select company_cd, company_nm 
 from company_code cc 
 where not exists (select 'x' from crawl_fs_link cfl where cc.company_cd=cfl.company_cd) 
+order by company_cd desc
 ;""")
 
     return company_df
@@ -111,11 +115,19 @@ if __name__ == '__main__':
 
     ## 코드 입력
     for idx, df in company_df.iterrows():
+        if df['company_cd'] in ['276920']:
+            continue
+
         get_list.insert_search_word(code=df['company_cd'])
         get_list.search()
         time.sleep(5)
         get_list.find_table()
         url_table = get_list.find_report_url()
+
+        if url_table is None:
+            get_list.search_clear()
+            time.sleep(2)
+            continue
         url_table.drop(['번호'], inplace=True, axis=1)
         url_table['공시대상회사'] = url_table['공시대상회사'].apply(lambda x: x.split()[1])
 
@@ -131,7 +143,7 @@ if __name__ == '__main__':
         url_table['report_dt'] = url_table['report_dt'].apply(pd.to_datetime)
 
         url_table.to_sql(con=db_conn.sa_conn, name="crawl_fs_link", index=False, if_exists="append")
-        time.sleep(3)
+        time.sleep(5)
 
         get_list.search_clear()
         if idx % 10 ==0:
