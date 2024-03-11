@@ -52,10 +52,14 @@ class DataControl(object):
 
     def get_list(self):
         list_df = self.db.sql_dataframe("""select company_nm, report_nm, report_dt, url, company_cd
-                            from  crawl_fs_link cfl 
-                            where not exists (select 'x' from report r where cfl.company_cd = r.company_cd 
-                                                                    and cfl.url = r.url)
-                            ;""")
+from  crawl_fs_link cfl 
+where not exists (select 'x' from report r 
+								where cfl.company_cd = r.company_cd 
+								and cfl.url = r.url)
+and exists (select 'x' from company_code cc where cc.company_cd = cfl.company_cd
+			and cc.is_get_list ='1' and cc.is_priority ='1')
+			and url like 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo%'
+;""")
         return list_df
 
     def insert_first_page(self, company_cd, report_dt, biz_start_date, biz_end_date, ceo, url, first_page_url):
@@ -122,7 +126,7 @@ class ReadPage(Crawler):
 
         # 회사별 검색 접속
         self.driver.get(url=url)
-        time.sleep(3)
+        time.sleep(2)
 
     def find_biz_report(self) -> None:
         is_find = False
@@ -245,11 +249,12 @@ if __name__ == '__main__':
     )
     db_controller = DataControl(db=db_conn)
     list_df = db_controller.get_list()
+    print(list_df)
 
     for idx, data in list_df.iterrows():
 
         print(data['company_nm'],data['company_cd'],data['url'])
-        if data['company_cd'] in ["001120","161000","138930"]:
+        if data['company_cd'] in ["001120","161000","138930","185490","263920","차백신연구소","247540","246830","244460","242850","239340"]:
             continue
         crawl = ReadPage()
         crawl.go_to_page(url=data['url'])
@@ -279,7 +284,7 @@ if __name__ == '__main__':
         # db_controller.insert_info24(data['company_cd'], data['report_dt'], info_24_group)
         #
         crawl.driver.close()
-        time.sleep(0.8)
+        time.sleep(0.7)
 
         if idx % 15 ==0:
             time.sleep(10)
