@@ -2,6 +2,7 @@
 import os
 
 import re
+import sys
 import time
 import datetime as dt
 
@@ -16,6 +17,7 @@ from bs4 import BeautifulSoup
 import requests
 import pandas as pd
 
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 from src.module.db_connection import PostgreSQL
 
 from dotenv import load_dotenv
