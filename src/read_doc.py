@@ -26,6 +26,7 @@ load_dotenv(".env")
 
 replace_null = lambda x : 'NULL' if x is None else "'"+x.replace("'", "''")+ "'"
 
+
 class Crawler():
 
     def __init__(self):
@@ -55,8 +56,12 @@ class DataControl(object):
     def __init__(self, db: PostgreSQL):
         self.db = db
 
-    def get_list(self):
-        list_df = self.db.sql_dataframe("""
+    def get_list(self, crawler_no):
+        if crawler_no in ['1', 1]:
+            order_by_method = 'asc'
+        else:
+            order_by_method = 'desc'
+        list_df = self.db.sql_dataframe(f"""
         select company_nm, report_nm, report_dt, url, company_cd
             from  crawl_fs_link cfl 
             where  1=1
@@ -67,7 +72,7 @@ class DataControl(object):
             and exists (select 'x' from company_code cc where cc.company_cd = cfl.company_cd
                         and cc.is_get_list ='1' and cc.is_priority ='1')
                         and url like 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo%'
-            order by company_cd
+            order by company_cd {order_by_method}
             ;
         """)
         return list_df
@@ -266,6 +271,7 @@ if __name__ == '__main__':
     db_database = os.environ["DB_DATABASE"]
     db_user = os.environ["DB_USER"]
     db_password = os.environ["DB_PASSWORD"]
+    crawler_no = os.environ["CRAWLER_NO"]
 
     db_conn = PostgreSQL(
         host=db_host,
@@ -275,7 +281,7 @@ if __name__ == '__main__':
         password=db_password,
     )
     db_controller = DataControl(db=db_conn)
-    list_df = db_controller.get_list()
+    list_df = db_controller.get_list(crawler_no)
     print(list_df)
 
     for idx, data in list_df.iterrows():
