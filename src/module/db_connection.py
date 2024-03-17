@@ -24,35 +24,33 @@ class PostgreSQL(object):
 
 
     def sql_execute(self, query: str) -> None:
-        self._connect = pg.connect(host=self.__host, port=str(self.__port), database=self.__database, user=self.__user,
+        _connect = pg.connect(host=self.__host, port=str(self.__port), database=self.__database, user=self.__user,
                                    password=self.__password)
-        self.cur = self._connect.cursor()
+        self.cur = _connect.cursor()
         try:
             self.cur.execute(query)
             # self.cur.commit()
-            self._connect.commit()
+            _connect.commit()
             self.cur.close()
-            self._connect.close()
+            _connect.close()
         except Exception as e:
             print(e)
-            self._connect.rollback()
+            _connect.rollback()
             self.cur.close()
-            self._connect.close()
+            _connect.close()
             sys.exit(1)
 
     def sql_dataframe(self, query: str) -> pd.DataFrame:
-        self._connect = pg.connect(host=self.__host, port=str(self.__port), database=self.__database, user=self.__user,
+        _connect = pg.connect(host=self.__host, port=str(self.__port), database=self.__database, user=self.__user,
                                    password=self.__password)
-        df = psql.read_sql_query(query, self._connect)
-        self._connect.close()
+        df = psql.read_sql_query(query, _connect)
+        _connect.close()
         return df
 
     def sa_session(self):
         import sqlalchemy as sa
         self.sa_conn = sa.create_engine(f"postgresql://{self.__user}:{self.__password}@{self.__host}:{self.__port}/{self.__database}")
 
-    def __del__(self):
-        self._connect.close()
 
 
 if __name__ == '__main__':
