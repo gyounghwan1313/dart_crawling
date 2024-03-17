@@ -28,7 +28,10 @@ class Crawler():
 
     def __init__(self):
         self._chrome_options = Options()
-        self._chrome_options.add_experimental_option("detach", True)
+        self._chrome_options.add_argument("--headless=new")
+        # self._chrome_options.add_experimental_option("detach", True)
+        self._chrome_options.add_argument(
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/84.0.4147.89 Safari/537.36")
         self.driver = None
 
         self.biz_start_date = None
@@ -51,16 +54,28 @@ class DataControl(object):
         self.db = db
 
     def get_list(self):
-        list_df = self.db.sql_dataframe("""select company_nm, report_nm, report_dt, url, company_cd
-from  crawl_fs_link cfl 
-where not exists (select 'x' from report r 
-								where cfl.company_cd = r.company_cd 
-								and cfl.url = r.url)
-and exists (select 'x' from company_code cc where cc.company_cd = cfl.company_cd
-			and cc.is_get_list ='1' and cc.is_priority ='1')
-			and url like 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo%'
-;""")
+        list_df = self.db.sql_dataframe("""
+        select company_nm, report_nm, report_dt, url, company_cd
+            from  crawl_fs_link cfl 
+            where  1=1
+            and cfl.is_read_complete is null
+            and not exists (select 'x' from report r 
+                                            where cfl.company_cd = r.company_cd 
+                                            and cfl.url = r.url)
+            and exists (select 'x' from company_code cc where cc.company_cd = cfl.company_cd
+                        and cc.is_get_list ='1' and cc.is_priority ='1')
+                        and url like 'https://dart.fss.or.kr/dsaf001/main.do?rcpNo%'
+            order by company_cd
+            ;
+        """)
         return list_df
+
+    def collect_fail(self, url):
+        query = f"""UPDATE public.crawl_fs_link 
+                        SET updated_time=now(), is_read_complete='fail'
+                        where url = '{url}';"""
+        self.db.sql_execute(query)
+
 
     def insert_first_page(self, company_cd, report_dt, biz_start_date, biz_end_date, ceo, url, first_page_url):
         query = f"""INSERT INTO public.report (company_cd, report_dt, biz_start_date, biz_end_date, ceo, url, first_page_url) 
@@ -97,6 +112,16 @@ and exists (select 'x' from company_code cc where cc.company_cd = cfl.company_cd
                                                url = '{url}'
                                                updated_timestamp='now()';"""
         self.db.sql_execute(query)
+
+    def check_collect_able(self, url):
+        query = f"""select count(*)
+                    from  crawl_fs_link cfl 
+                    where 1=1
+                    and cfl.is_read_complete != 'fail'
+                    and url = '{url}';"""
+
+        df = self.db.sql_dataframe(query)
+        return len(df)== 0
 
 
 class ReadPage(Crawler):
@@ -254,12 +279,18 @@ if __name__ == '__main__':
     for idx, data in list_df.iterrows():
 
         print(data['company_nm'],data['company_cd'],data['url'])
-        if data['company_cd'] in ["001120","161000","138930","185490","263920","차백신연구소","247540","246830","244460","242850","239340"]:
+        # if data['company_cd'] in ["001120","161000","138930","185490","263920","차백신연구소","247540","246830","244460","242850","239340","234100","024830"]:
+        if db_controller.check_collect_able(data['url']):
             continue
         crawl = ReadPage()
         crawl.go_to_page(url=data['url'])
-
-        crawl.find_biz_report()
+        try:
+            crawl.find_biz_report()
+        except Exception as e:
+            print(f"ERROR : {e}")
+            db_controller.collect_fail(url=data['url'])
+            crawl.driver.close()
+            continue
         first_page = crawl.find_linked_page()
 
         biz_start_date, biz_end_date, ceo = crawl.parsing_first_page(first_page)
